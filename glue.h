@@ -402,6 +402,41 @@ static inline void ipv6_addr_copy(struct in6_addr *a1, const struct in6_addr *a2
 {
         memcpy(a1, a2, sizeof(struct in6_addr));
 }
+// reference from include/net/ipv6.h
+static inline void __ipv6_addr_set_half(__be32 *addr,
+					__be32 wh, __be32 wl)
+{
+#if defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) && BITS_PER_LONG == 64
+#if defined(__BIG_ENDIAN)
+	if (__builtin_constant_p(wh) && __builtin_constant_p(wl)) {
+		*(__force u64 *)addr = ((__force u64)(wh) << 32 | (__force u64)(wl));
+		return;
+	}
+#elif defined(__LITTLE_ENDIAN)
+	if (__builtin_constant_p(wl) && __builtin_constant_p(wh)) {
+		*(__force u64 *)addr = ((__force u64)(wl) << 32 | (__force u64)(wh));
+		return;
+	}
+#endif
+#endif
+	addr[0] = wh;
+	addr[1] = wl;
+}
+static inline void ipv6_addr_set(struct in6_addr *addr, 
+				     __be32 w1, __be32 w2,
+				     __be32 w3, __be32 w4)
+{
+	__ipv6_addr_set_half(&addr->s6_addr32[0], w1, w2);
+	__ipv6_addr_set_half(&addr->s6_addr32[2], w3, w4);
+}
+static inline void ipv6_addr_set_v4mapped(const __be32 addr,
+					  struct in6_addr *v4mapped)
+{
+	ipv6_addr_set(v4mapped,
+			0, 0,
+			htonl(0x0000FFFF),
+			addr);
+}
 #endif /* _NET_IPV6_H */
 
 #endif	/* KERNEL_MODULE */

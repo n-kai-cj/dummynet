@@ -18,8 +18,7 @@ static __inline int
 callout_reset_on(struct callout *co, int ticks, void (*fn)(void *), void *arg, int cpu)
 {
         co->expires = jiffies + ticks;
-        co->function = (void (*)(unsigned long))fn;
-        co->data = (unsigned long)arg;
+        co->function = (void (*)(struct callout *))fn;
 	/*
 	 * Linux 2.6.31 and above has add_timer_on(co, cpu),
 	 * otherwise add_timer() always schedules a callout on the same
@@ -29,7 +28,7 @@ callout_reset_on(struct callout *co, int ticks, void (*fn)(void *), void *arg, i
         return 0;
 }
 
-#define callout_init(co, safe)  init_timer(co)
+#define callout_init(co, fn, safe)  timer_setup(co, (void (*)(struct callout *))fn, 0)
 #define callout_drain(co)       del_timer(co)
 #define callout_stop(co)        del_timer(co)
 

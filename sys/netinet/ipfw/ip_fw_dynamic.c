@@ -1169,7 +1169,7 @@ ipfw_dyn_init(void)
         V_dyn_keepalive = 1;    /* do send keepalives */
         
         V_dyn_max = 4096;       /* max # of dynamic rules */
-        callout_init(&V_ipfw_timeout, CALLOUT_MPSAFE);
+        callout_init(&V_ipfw_timeout, ipfw_tick, CALLOUT_MPSAFE);
         callout_reset_on(&V_ipfw_timeout, hz, ipfw_tick, curvnet, 0);
 }
 

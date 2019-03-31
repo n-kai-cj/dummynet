@@ -357,9 +357,12 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 		/* self-generated packet, wrap as appropriate and send */
 #ifdef __linux__
 		struct sk_buff *skb = mbuf2skbuff(m);
+		struct net *net = NULL;
 
-		if (skb != NULL)
-			dst_output(skb);
+		if (skb != NULL){
+                       net = sock_net(skb->sk);
+                       dst_output(net, skb->sk, skb);
+		}
 #else /* Windows */
 		D("unimplemented.");
 #endif
@@ -406,9 +409,6 @@ static struct nf_sockopt_ops ipfw_sockopts = {
 	.get_optmin	= _IPFW_SOCKOPT_BASE,
 	.get_optmax	= _IPFW_SOCKOPT_END,
 	.get		= do_ipfw_get_ctl,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24)
-	.owner		= THIS_MODULE,
-#endif
 };
 
 /*----
@@ -470,7 +470,7 @@ call_ipfw(
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,13,0)
 	unsigned int hooknum,
 #else
-	const struct nf_hook_ops *hooknum,
+	void *hooknum,
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,23) // in 2.6.22 we have **
@@ -478,10 +478,8 @@ call_ipfw(
 #else
 	struct sk_buff  *skb,
 #endif
-	const struct net_device *in, const struct net_device *out,
-	int (*okfn)(struct sk_buff *))
+	const struct nf_hook_state *state)
 {
-	(void)hooknum; (void)skb; (void)in; (void)out; (void)okfn; /* UNUSED */
 	return NF_QUEUE;
 }
 
@@ -556,7 +554,7 @@ ipfw2_queue_handler(QH_ARGS)
 	m->m_skb = skb;
 	m->m_len = skb->len;		/* len from ip header to end */
 	m->m_pkthdr.len = skb->len;	/* total packet len */
-	m->m_pkthdr.rcvif = info->indev;
+	m->m_pkthdr.rcvif = info->state.in;
 	m->queue_entry = info;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,22)	/* XXX was 2.6.0 */
 	m->m_data = (char *)skb->nh.iph;
@@ -565,10 +563,10 @@ ipfw2_queue_handler(QH_ARGS)
 #endif
 
 	/* XXX add the interface */
-	if (info->hook == IPFW_HOOK_IN) {
-		ret = ipfw_check_hook(NULL, &m, info->indev, PFIL_IN, NULL);
+	if (info->state.hook == IPFW_HOOK_IN) {
+		ret = ipfw_check_hook(NULL, &m, info->state.in, PFIL_IN, NULL);
 	} else {
-		ret = ipfw_check_hook(NULL, &m, info->outdev, PFIL_OUT, NULL);
+		ret = ipfw_check_hook(NULL, &m, info->state.out, PFIL_OUT, NULL);
 	}
 
 	if (m != NULL) {	/* Accept. reinject and free the mbuf */
@@ -695,11 +693,14 @@ linux_lookup(const int proto, const __be32 saddr, const __be16 sport,
 #define _OPT_NET_ARG dev_net(skb->dev),
 #endif
 #endif
+		const struct tcphdr *tcp = tcp_hdr(skb);
 		sk =  (dir) ? /* dir != 0 on output */
 		    inet_lookup(_OPT_NET_ARG &tcp_hashinfo,
+			skb, __tcp_hdrlen(tcp),
 			daddr, dport, saddr, sport,	// match outgoing
 			inet_iif(skb)) :
 		    inet_lookup(_OPT_NET_ARG &tcp_hashinfo,
+			skb, __tcp_hdrlen(tcp),
 			saddr, sport, daddr, dport,	// match incoming
 			skb->dev->ifindex);
 #undef _OPT_NET_ARG
@@ -775,9 +776,9 @@ struct nf_queue_handler ipfw2_queue_handler_desc = {
 #endif
 };
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,2)
-#define REG_QH_ARG(pf, fn)	pf, &(fn ## _desc)
+#define REG_QH_ARG(net, pf, fn)	       pf, &(fn ## _desc)
 #else
-#define REG_QH_ARG(pf, fn)	&(fn ## _desc)
+#define REG_QH_ARG(net, pf, fn)        net, &(fn ## _desc)
 #endif
 #endif
 
@@ -803,22 +804,24 @@ nf_unregister_hooks(struct nf_hook_ops *ops, int n)
 	}
 }
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,14) /* XXX was 2.6.0 */
-#define REG_QH_ARG(pf, fn)	pf, fn, NULL
+#define REG_QH_ARG(net, pf, fn)        pf, fn, NULL
 #endif
-#define UNREG_QH_ARG(pf, fn) //fn	/* argument for nf_[un]register_queue_handler */
+#define UNREG_QH_ARG(net, pf, fn) //fn /* argument for nf_[un]register_queue_handler */
 #define SET_MOD_OWNER
 
 #else /* linux > 2.6.17 */
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
-#define UNREG_QH_ARG(pf, fn) //fn
+#define UNREG_QH_ARG(net, pf, fn) //fn
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(3,8,2)
-#define UNREG_QH_ARG(pf, fn)	pf, &(fn ## _desc)
+#define UNREG_QH_ARG(net, pf, fn)      pf, &(fn ## _desc)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(4,7,0)
+#define UNREG_QH_ARG(net, pf, fn)
 #else
-#define UNREG_QH_ARG(pf, fn)
+#define UNREG_QH_ARG(net, pf, fn) net
 #endif /* 2.6.0 < LINUX > 2.6.24 */
 
-#define SET_MOD_OWNER	.owner = THIS_MODULE,
+#define SET_MOD_OWNER
 
 #endif	/* !LINUX < 2.6.0 */
 
@@ -837,6 +840,28 @@ static struct nf_hook_ops ipfw_ops[] __read_mostly = {
                 .priority       = NF_IP_PRI_FILTER,
 		SET_MOD_OWNER
         },
+};
+
+int __net_init ipfw_init(struct net *net)
+{
+	int ret = 0;	/* return value */
+	nf_register_queue_handler(REG_QH_ARG(net, PF_INET, ipfw2_queue_handler));
+	ret = nf_register_net_hooks(net, ipfw_ops, ARRAY_SIZE(ipfw_ops));
+	if (ret < 0)
+		nf_unregister_queue_handler(UNREG_QH_ARG(net, PF_INET, ipfw2_queue_handler));
+
+	return ret;
+}
+
+void __net_exit ipfw_exit(struct net *net)
+{
+	nf_unregister_queue_handler(UNREG_QH_ARG(net, PF_INET, ipfw2_queue_handler));
+	nf_unregister_net_hooks(net,ipfw_ops, ARRAY_SIZE(ipfw_ops));
+}
+
+static struct pernet_operations my_ipfw_ops = {
+	.init = ipfw_init,
+	.exit = ipfw_exit,
 };
 #endif /* __linux__ */
 
@@ -898,15 +923,8 @@ ipfw_module_init(void)
 
 	/* queue handler registration, in order to get network
 	 * packet under a private queue */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,2)
-	ret =
-#endif
-	    nf_register_queue_handler(REG_QH_ARG(PF_INET, ipfw2_queue_handler) );
+	ret = register_pernet_subsys(&my_ipfw_ops);
         if (ret < 0)	/* queue busy */
-		goto unregister_sockopt;
-
-        ret = nf_register_hooks(ipfw_ops, ARRAY_SIZE(ipfw_ops));
-        if (ret < 0)
 		goto unregister_sockopt;
 
 	printf("%s loaded\n", __FUNCTION__);
@@ -915,7 +933,6 @@ ipfw_module_init(void)
 
 /* handle errors on load */
 unregister_sockopt:
-	nf_unregister_queue_handler(UNREG_QH_ARG(PF_INET, ipfw2_queue_handler) );
 	nf_unregister_sockopt(&ipfw_sockopts);
 
 clean_modules:
@@ -937,9 +954,7 @@ ipfw_module_exit(void)
 	ExSetTimerResolution(0,FALSE);
 
 #else  /* linux hook */
-        nf_unregister_hooks(ipfw_ops, ARRAY_SIZE(ipfw_ops));
-	/* maybe drain the queue before unregistering ? */
-	nf_unregister_queue_handler(UNREG_QH_ARG(PF_INET, ipfw2_queue_handler) );
+	unregister_pernet_subsys(&my_ipfw_ops);
 	nf_unregister_sockopt(&ipfw_sockopts);
 #endif	/* __linux__ */
 
