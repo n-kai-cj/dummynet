@@ -143,6 +143,13 @@ openwrt_release:
 	@echo "after this the temporary directory $(TMPDIR) can be removed."
 
 install:
+	cp ipfw/ipfw /usr/local/sbin/
+	mkdir -p /lib/modules/`uname -r`/kernel/net/netfilter/
+	cp kipfw-mod/ipfw_mod.ko /lib/modules/`uname -r`/kernel/net/netfilter/
+	depmod
+	modprobe ipfw_mod
+	echo "br_netfilter" >> /etc/modules
+	echo "ipfw_mod" >> /etc/modules
 
 diff:
 	-@(diff -upr $(BSD_HEAD)/sbin/ipfw ipfw)
