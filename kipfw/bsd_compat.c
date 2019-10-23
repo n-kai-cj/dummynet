@@ -37,6 +37,20 @@
 #include <sys/malloc.h>
 
 /*
+ * do_gettimeofday() is deprecated because it's not y2038-safe on
+ * 32-bit architectures. Since it is basically a wrapper around
+ * ktime_get_real_ts64(), we can just call that function directly instead.
+ * need to be fixed.
+ */
+void do_gettimeofday(struct timeval *tv)
+{
+	struct timespec64 ts;
+	ktime_get_real_ts64(&ts);
+	tv->tv_sec = ts.tv_sec;
+	tv->tv_usec = ts.tv_nsec/1000;
+}
+
+/*
  * gettimeofday would be in sys/time.h but it is not
  * visible if _KERNEL is defined
  */
