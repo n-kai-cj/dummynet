@@ -2034,6 +2034,7 @@ do {								\
 					send_reject(args, cmd->arg1, iplen, ip);
 					m = args->m;
 				}
+				break;
 				/* FALLTHROUGH */
 #ifdef INET6
 			case O_UNREACH6:
@@ -2048,6 +2049,7 @@ do {								\
 					    (struct ip6_hdr *)ip);
 					m = args->m;
 				}
+				break;
 				/* FALLTHROUGH */
 #endif
 			case O_DENY:
