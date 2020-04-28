@@ -22,6 +22,10 @@ import time
 import subprocess
 import csv
 import threading
+import argparse
+
+# loop flag
+loop = True
 
 ### read next line ###
 def nextread(f):
@@ -41,9 +45,9 @@ def allow_ssh_rdp():
     subprocess.call('ipfw add 2 allow ip from any 22,3389 to any', shell=True)
 
 ### network shaping ###
-def run(idx, csv_name, sleep):
+def run(csv_name, idx, sleep):
     runfirst = True
-    while True:
+    while loop:
         with open(csv_name, 'r') as csv_file:
             ### read header ###
             f = csv.reader(csv_file)
@@ -57,16 +61,14 @@ def run(idx, csv_name, sleep):
             dstport = line[1]
             line = nextread(f)
             opt = line[0]
-            if idx == 100:
-                print("--------------------------------------------------")
-                print("%s from %s:%s to %s:%s %s"
-                      % (proto, srcip, srcport, dstip, dstport, opt))
+            print("--------------------------------------------------")
+            print("%s from %s:%s to %s:%s %s" % (proto, srcip, srcport, dstip, dstport, opt))
             ### exec ipfw add pipe for the first time  ###
             if runfirst == True:
                 subprocess.call("ipfw -q add pipe {} ip from {} {} to {} {} {}".format(idx, srcip, srcport, dstip, dstport, opt), shell=True)
                 runfirst = False
             ### network shaping loop ###
-            while True:
+            while loop:
                 line = nextread(f)
                 if line == None:
                     break
@@ -79,19 +81,43 @@ def run(idx, csv_name, sleep):
                     queue = int(line[3])
                     cmd = "ipfw -q pipe {} config bw {}K delay {} plr {} queue {}K".format(idx, bw, delay, plr, queue)
                     subprocess.call(cmd, shell=True)
-                    if idx == 100:
-                        print("--------------------------------------------------")
-                        subprocess.call("ipfw pipe show", shell=True)
+                    print("--------------------------------------------------")
+                    subprocess.call("ipfw pipe show", shell=True)
                 except ValueError:
                     print("error: invalid {}".format(line))
                 time.sleep(sleep)
             
             
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print('usage: python3 {} <data.csv>'.format(sys.argv[0]))
-        exit(1)
+    desc='''
+    Note: flush existing all pipes before running
+    Press 'Ctrl + C' to quit
+    # python %s -i INPUT_FILE
+    '''%(sys.argv[0])
+
+    class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):pass
+    parser = argparse.ArgumentParser(
+        description=desc,
+        formatter_class=CustomFormatter)
+
+    parser.add_argument("-i", "--inputs", type=str, required=True, help="input csv file")
+    parser.add_argument("--sleep", type=int, required=False, default=1, help="sleep sec between each line")
+    parser.add_argument("--pipe", type=int, required=False, default=100, help="ipfw pipe start num")
+    args = parser.parse_args()
+
     flush_ipfw()
     allow_ssh_rdp()
-    run(100, sys.argv[1], 1)
+    thread = threading.Thread(target=run, args=(args.inputs, args.pipe, args.sleep))
+    thread.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("KeyboardInterrupt!")
+        loop = False
+
+    time.sleep(args.sleep+1)
+    flush_ipfw()
+
 
